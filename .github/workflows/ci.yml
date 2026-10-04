@@ -1,7 +1,7 @@
 # Continuous integration for lean-fmt.
 #
-# test: every push to main and every pull request, split across four jobs — one for the unit
-# tier and three for the suite registry, partitioned by the runner's own `--part INDEX/COUNT`,
+# test: every push to main or a dev branch and every pull request, split across four jobs — one for
+# the unit tier and three for the suite registry, partitioned by the runner's own `--part INDEX/COUNT`,
 # so a suite added to the registry joins a part without a workflow edit. The runner deals each
 # lane separately: workspace suites serialize inside a job, so an even deal of them is what
 # balances the jobs' wall times. lean-action builds and lints (`lake lint` runs the formatter as
@@ -31,7 +31,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev, 'dev/**']
   pull_request:
   workflow_dispatch:
   schedule:
