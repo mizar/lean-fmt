@@ -1142,11 +1142,35 @@ private def runBeforeWriteHook (path : FilePath) : IO Unit := do
 
 private def publishAtomic (path : FilePath) (original output : String) : IO (Except String Unit) :=
   do
-  let mode ← accessMode path
+  let mode ←
+    if System.Platform.isWindows then
+      pure none
+    else
+      some <$> accessMode path
   let temporary ← publicationTemp path
   try
     IO.FS.writeFile temporary output
-    IO.Prim.setAccessRights temporary mode.toUInt32
+    if let some mode := mode then
+      IO.Prim.setAccessRights temporary mode.toUInt32
+    else
+      -- Lean exposes neither Windows ACLs nor the read-only attribute. Preserve the ACL on the
+      -- replacement, and refuse read-only sources before renaming over them.
+      let permissions ←
+        IO.Process.output
+            { cmd := "powershell.exe"
+              args :=
+                #["-NoProfile", "-NonInteractive", "-Command",
+                  "$ErrorActionPreference = 'Stop'; \
+          if (([IO.File]::GetAttributes($env:LEAN_FMT_PERMISSION_SOURCE) -band \
+          [IO.FileAttributes]::ReadOnly) -ne 0) \
+          { throw 'source is read-only' }; \
+          [IO.File]::SetAccessControl($env:LEAN_FMT_PERMISSION_TARGET, \
+          [IO.File]::GetAccessControl($env:LEAN_FMT_PERMISSION_SOURCE))"]
+              env :=
+                #[("LEAN_FMT_PERMISSION_SOURCE", some path.toString),
+                  ("LEAN_FMT_PERMISSION_TARGET", some temporary.toString)] }
+      unless permissions.exitCode == 0 do
+        throw <| IO.userError s!"could not preserve source permissions: {permissions.stderr}"
     runBeforeWriteHook path
     unless (← IO.FS.readFile path) == original do
       IO.FS.removeFile temporary
@@ -2785,6 +2809,7 @@ def describeConfig (requestedRoot : FilePath) (configPath? : Option FilePath) (a
     throw <| IO.userError s!"selected file does not exist: {argument}"
   let absolute ← IO.FS.realPath (System.FilePath.mk argument)
   let relative := (Lake.relPathFrom root absolute).toString
+  let relative := if System.Platform.isWindows then relative.replace "\\" "/" else relative
   -- Timed here as well as in `execute`, and for the same reason: this is the one entry point
   -- that runs discovery and nothing else, so it is how the walk's cost is measured without the
   -- per-file pipeline on top of it.

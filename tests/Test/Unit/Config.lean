@@ -28,8 +28,10 @@ import all LeanFmt.Discovery
 import all LeanFmt.Doc
 import all LeanFmt.Edit
 import all LeanFmt.Formatter.NativeLayout
+import all LeanFmt.GitSelection
 import all LeanFmt.Imports
 import all LeanFmt.LanguageServer
+import all LeanFmt.Project
 import all LeanFmt.Rules
 import all LeanFmt.Suppression
 import all Test.Unit.Fixtures
@@ -646,8 +648,36 @@ extend-select = [\"FMT009\"]\n"
   finally
     IO.FS.removeDirAll directory
 
+private def testProjectPaths : IO Unit :=
+  withTempDir fun directory => do
+    let root ← IO.FS.realPath directory
+    writeFile (root / "lakefile.lean") "import Lake\nopen Lake DSL\npackage fixture\n"
+    copyFile ((← repoRoot) / "lean-toolchain") (root / "lean-toolchain")
+    writeFile (root / "sub" / "lean-fmt.toml") "[format]\nline-width = 42\n"
+    writeFile (root / "sub" / "A.lean") "module\n"
+    let discovery ← Discovery.run root none
+    let snapshot ← Project.load root discovery #[root / "sub" / "A.lean"]
+    let some target :=
+      snapshot.targets[0]? | throw <| IO.userError "project selection lost the requested source"
+    ensureEq "project paths use discovery coordinates" "sub/A.lean" target.relativePath
+    ensureEq "nested configuration reaches project targets" 42 target.config.format.lineWidth
+    let unsaved ←
+      Project.unsavedTarget snapshot.workspace discovery root (root / "sub" / "New.lean").toString
+          "module\n"
+    ensureEq "unsaved project paths use discovery coordinates" "sub/New.lean" unsaved.relativePath
+    ensureEq "nested configuration reaches unsaved targets" 42 unsaved.config.format.lineWidth
+    let report ← Application.describeConfig root none (root / "sub" / "A.lean").toString
+    ensureEq "config show uses discovery coordinates" "sub/A.lean" report.relativePath
+    ensureEq "config show reaches nested settings" (some "42")
+        ((report.settings.find? (·.key == "format.line-width")).map (·.value))
+    let confined ← GitSelection.confine root root "sub/A.lean"
+    ensure confined.isSome "git selection dropped a source inside the root"
+    let outside ← GitSelection.confine root (root / "sub") "lakefile.lean"
+    ensure outside.isNone "git selection admitted a source outside the selected root"
+
 /-- The cases this module contributes to the unit runner, in run order. -/
 public def cases : Array Case :=
-  #[{ name := "testConfig", run := testConfig }, { name := "testDiscovery", run := testDiscovery }]
+  #[{ name := "testConfig", run := testConfig }, { name := "testDiscovery", run := testDiscovery },
+    { name := "testProjectPaths", run := testProjectPaths }]
 
 end LeanFmt.Test.Unit.Config

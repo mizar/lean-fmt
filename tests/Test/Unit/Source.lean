@@ -417,6 +417,28 @@ private def testLeadingStart : IO Unit := do
   ensureEq "a leaf with no original position is not a cursor" 64
       (startOf (some { node := 0, start := 0, stop := 0, info := .missing }))
 
+private def testAtomicPublication : IO Unit :=
+  withTempDir fun root => do
+    let path := root / "source ' 日本語.lean"
+    let original := "module\r\n\r\ndef  value :Nat:=1\r\n"
+    let formatted := "module\r\n\r\ndef value : Nat := 1\r\n"
+    IO.FS.writeFile path original
+    let result ← Application.publishAtomic path original formatted
+    match result with
+    | .ok () =>
+      pure ()
+    | .error message =>
+      throw <| IO.userError message
+    ensureEq "atomic publication preserves the candidate bytes" formatted (← IO.FS.readFile path)
+    let stale ← Application.publishAtomic path original "stale overwrite\n"
+    match stale with
+    | .error _ =>
+      pure ()
+    | .ok () =>
+      throw <| IO.userError "atomic publication accepted stale source"
+    ensureEq "stale publication changed the source" formatted (← IO.FS.readFile path)
+    ensureEq "publication left temporary files" 1 (← root.readDir).size
+
 /-- The cases this module contributes to the unit runner, in run order. -/
 public def cases : Array Case :=
   #[{ name := "testLosslessSource", run := testLosslessSource },
@@ -425,6 +447,7 @@ public def cases : Array Case :=
     { name := "testNodeDivergenceSource", run := testNodeDivergenceSource },
     { name := "testIdempotenceSources", run := testIdempotenceSources },
     { name := "testLeadingStart", run := testLeadingStart },
-    { name := "testSuppression", run := testSuppression }]
+    { name := "testSuppression", run := testSuppression },
+    { name := "testAtomicPublication", run := testAtomicPublication }]
 
 end LeanFmt.Test.Unit.Source

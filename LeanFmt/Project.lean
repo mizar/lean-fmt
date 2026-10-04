@@ -222,7 +222,9 @@ private def deduplicate (targets : Array SourceTarget) : Array SourceTarget :=
   unique
 
 private def insideRoot (root path : FilePath) : Bool :=
-  path == root || path.toString.startsWith (root.toString ++ FilePath.pathSeparator.toString)
+  let key := fun (p : FilePath) =>
+    if System.Platform.isWindows then p.toString.toLower else p.toString
+  key path == key root || (key path).startsWith (key root ++ FilePath.pathSeparator.toString)
 
 /-- Whether a root-relative path lies inside Lake's build directory.
 
@@ -246,6 +248,8 @@ private def snapshotTarget (workspace : Lake.Workspace) (discovery : Discovery.D
   if insideLakeDirectory (Lake.relPathFrom root path).toString then
     throw <| IO.userError s!"selected file is inside the Lake build directory: {path}"
   let relativePath := (Lake.relPathFrom root path).toString
+  let relativePath :=
+    if System.Platform.isWindows then relativePath.replace "\\" "/" else relativePath
   return {
       module? := workspace.findModuleBySrc? path
       path
@@ -299,12 +303,15 @@ def unsavedTarget (workspace : Lake.Workspace) (discovery : Discovery.Discovery)
   do
   let written := FilePath.mk argument
   let spelling := spelling?.getD argument
+  let root := resolveLexically root
   let candidate := resolveLexically (if written.isAbsolute then written else root / written)
   unless insideRoot root candidate do
     throw <| IO.userError s!"selected file is outside the project root: {spelling}"
   unless candidate.extension == some "lean" do
     throw <| IO.userError s!"selected file is not a Lean source: {spelling}"
   let relativePath := (Lake.relPathFrom root candidate).toString
+  let relativePath :=
+    if System.Platform.isWindows then relativePath.replace "\\" "/" else relativePath
   if insideLakeDirectory relativePath then
     throw <| IO.userError s!"selected file is inside the Lake build directory: {spelling}"
   let path ←
