@@ -46,8 +46,7 @@ git clone --branch v4.34.0 https://github.com/jcreinhold/lean-fmt.git && cd lean
 With elan on `PATH` this installs the matching toolchain itself. `PREFIX=/usr/local` overrides the install location,
 `DESTDIR` stages, `make uninstall` removes.
 
-Linux and Windows share the native Lean application. See [Windows build notes](docs/manual/windows-build.md)
-for Windows-specific setup and known manual build issues.
+Linux and Windows share the native Lean application.
 
 ## Use
 
@@ -121,6 +120,7 @@ it because no break placement would shorten it.
 - `docs/configuration.md` — every config key, selection, streaming, workers, the cache.
 - `docs/ci.md` — CI recipes, caching, upgrading.
 - `docs/editor-setup.md` — the language server.
+- `docs/manual/windows-build.md` — native application setup and known manual build issues.
 - `docs/maintenance.md` — the release policy and what happens when Lean moves.
 - `CHANGELOG.md` — what changed in each release.
 
