@@ -61,6 +61,11 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           test: "false"
+      - name: expose elan to subsequent steps
+        shell: pwsh
+        run: |
+          "$env:USERPROFILE\.elan\bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: native unit tier and filesystem regressions
         run: lake test -- --unit-only
       - name: LF, CRLF, and mixed publication
@@ -87,6 +92,11 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           test: "false"
+      - name: expose elan to subsequent steps
+        shell: pwsh
+        run: |
+          "$env:USERPROFILE\.elan\bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: native unit tier and filesystem regressions
         run: lake test -- --unit-only
       - name: LF, CRLF, and mixed publication
