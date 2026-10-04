@@ -149,13 +149,13 @@ private def strField (json : Json) (name : String) : String :=
 -- Fixture addresses
 
 private def findingsUri (ctx : Ctx) : String :=
-  s!"file://{ctx.rootStr}/tests/fixtures/check/Findings.lean"
+  System.Uri.pathToUri (ctx.root / "tests" / "fixtures" / "check" / "Findings.lean")
 
 private def layoutUri (ctx : Ctx) : String :=
-  s!"file://{ctx.rootStr}/tests/fixtures/check/Layout.lean"
+  System.Uri.pathToUri (ctx.root / "tests" / "fixtures" / "check" / "Layout.lean")
 
 private def cleanUri (ctx : Ctx) : String :=
-  s!"file://{ctx.rootStr}/tests/fixtures/check/Clean.lean"
+  System.Uri.pathToUri (ctx.root / "tests" / "fixtures" / "check" / "Clean.lean")
 
 private def readFixture (ctx : Ctx) (name : String) : IO String :=
   IO.FS.readFile (ctx.root / "tests" / "fixtures" / "check" / name)
@@ -255,8 +255,9 @@ private def testDocumentAdmission (ctx : Ctx) : IO Unit := do
         (requestFrame 1 "initialize" (some (Json.mkObj [])) ++ openFrame (findingsUri ctx) source ++
           openFrame "untitled:Untitled-1" "def x := 1\n" ++
           openFrame "file:///etc/hosts" "def x := 1\n" ++
-          openFrame s!"file://{ctx.rootStr}/.lake/packages/x/X.lean" "def x := 1\n" ++
-          openFrame s!"file://{ctx.rootStr}/README.md" "# not lean\n" ++
+          openFrame (System.Uri.pathToUri (ctx.root / ".lake" / "packages" / "x" / "X.lean"))
+            "def x := 1\n" ++
+          openFrame (System.Uri.pathToUri (ctx.root / "README.md")) "# not lean\n" ++
           requestFrame 2 "$/lean-fmt/health" ++
           requestFrame 3 "shutdown" ++
           notificationFrame "exit")
@@ -678,7 +679,7 @@ private def testNoPersistentEvidence (ctx : Ctx) : IO Unit := do
       let source := "module\n\ndef drifted : Nat :=\n    1\n"
       let documentPath := work / "Isolation.lean"
       writeFile documentPath source
-      let uri := s!"file://{documentPath}"
+      let uri := System.Uri.pathToUri documentPath
       let ((), code) ←
         LspClient.withServer ctx.app work.toString do
             discard <| initializeSession work.toString
