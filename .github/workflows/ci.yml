@@ -10,6 +10,10 @@
 # `test: "false"` input, CI ran the whole suite phase twice per job. Suites that need a tool the
 # runner lacks (Neovim, uv) skip rather than fail.
 #
+# windows: the pinned toolchain, with the native unit tier and portable publication/LSP regressions.
+# windows-next-toolchain: the same checks against the Linux probe's dynamic candidate, on schedule
+# and manual dispatch. It runs even when the Linux probe fails, so each platform has its own result.
+#
 # slow: the flake-hunt — the default set twice (a flake's signature is that it does not
 # survive repetition) plus the minutes-long stream, performance, downstream, ci,
 # lsp-acceptance, editor, incremental, and security-bench suites — weekly on a schedule and on
@@ -47,6 +51,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      LEAN_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: leanprover/lean-action@v1
+        with:
+          test: "false"
+      - name: native unit tier and filesystem regressions
+        run: lake test -- --unit-only
+      - name: LF, CRLF, and mixed publication
+        run: lake exe suite-application-formatter --filter line-endings
+      - name: unsaved LF, CRLF, and mixed formatting
+        run: lake exe suite-lsp --filter line-endings
+
+  # Share the dynamically resolved candidate with the Linux probe, even if that probe fails.
+  windows-next-toolchain:
+    needs: next-toolchain
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+      needs.next-toolchain.outputs.moved == 'yes'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      LEAN_NUM_THREADS: "2"
+      CANDIDATE: ${{ needs.next-toolchain.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: pin the candidate
+        run: Set-Content -Encoding ascii lean-toolchain $env:CANDIDATE
+      - uses: leanprover/lean-action@v1
+        with:
+          test: "false"
+      - name: native unit tier and filesystem regressions
+        run: lake test -- --unit-only
+      - name: LF, CRLF, and mixed publication
+        run: lake exe suite-application-formatter --filter line-endings
+      - name: unsaved LF, CRLF, and mixed formatting
+        run: lake exe suite-lsp --filter line-endings
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -255,18 +302,18 @@ jobs:
           [ "${changed:-1}" = "0" ] || fail=1
           exit $fail
 
-  # A bump the probe found mechanical — it builds, and not one canonical byte moves — has nothing
+  # A candidate that builds without canonical-byte drift and passes the Windows checks has nothing
   # left for a person to decide, so it arrives as a pull request rather than as a note in a step
-  # summary somebody reads next month. The predicate is the verdict step's own, spelled out in
-  # `if:` because a job cannot inherit another's exit status.
+  # summary somebody reads next month. The Linux verdict and Windows result both gate the PR.
   #
   # The gate runs *here* rather than on the pull request: GitHub does not fire workflows for a PR
   # opened by `GITHUB_TOKEN`, so a PR from this job would otherwise sit with no checks at all. The
   # body records what ran, and pushing any commit to the branch starts ordinary CI on top.
   bump:
-    needs: next-toolchain
+    needs: [next-toolchain, windows-next-toolchain]
     if: >-
-      always() && needs.next-toolchain.outputs.moved == 'yes' &&
+      always() && needs.windows-next-toolchain.result == 'success' &&
+      needs.next-toolchain.outputs.moved == 'yes' &&
       needs.next-toolchain.outputs.build == 'success' &&
       needs.next-toolchain.outputs.changed == '0'
     runs-on: ubuntu-latest
@@ -371,7 +418,7 @@ jobs:
           \`README.md\` and \`docs/ci.md\`, \`docs/manual/lean-toolchain\`, and a CHANGELOG stub.
 
           The probe found this bump **mechanical**: lean-fmt builds under \`$CANDIDATE\` and not
-          one canonical byte moves across this repository. Vendored \`Std.Format\` region:
+          one canonical byte moves across this repository. The Windows candidate checks also passed. Vendored \`Std.Format\` region:
           \`${DRIFT:-not determined}\`.
 
           \`docs/manual\`: **${{ steps.move.outputs.manual }}**. It moves only when verso has
@@ -398,11 +445,12 @@ jobs:
   # One issue per candidate, created once: the probe re-runs weekly and re-reporting the same
   # candidate every Monday is how an alert becomes noise nobody reads.
   adaptation-alert:
-    needs: next-toolchain
+    needs: [next-toolchain, windows-next-toolchain]
     if: >-
       always() && needs.next-toolchain.outputs.moved == 'yes' &&
       (needs.next-toolchain.outputs.build != 'success' ||
-       needs.next-toolchain.outputs.changed != '0')
+       needs.next-toolchain.outputs.changed != '0' ||
+       needs.windows-next-toolchain.result != 'success')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -413,6 +461,7 @@ jobs:
       BUILD: ${{ needs.next-toolchain.outputs.build }}
       CHANGED: ${{ needs.next-toolchain.outputs.changed }}
       DRIFT: ${{ needs.next-toolchain.outputs.drift }}
+      WINDOWS: ${{ needs.windows-next-toolchain.result }}
     steps:
       - name: open one issue for this candidate
         run: |
@@ -432,7 +481,8 @@ jobs:
 
           | signal | result |
           | --- | --- |
-          | builds | \`$BUILD\` |
+          | Linux builds | \`$BUILD\` |
+          | Windows checks | \`$WINDOWS\` |
           | vendored \`Std.Format\` region | \`${DRIFT:-not determined}\` |
           | files whose canonical bytes move | \`${CHANGED:-not reached}\` |
 
@@ -440,9 +490,8 @@ jobs:
           Checklist: \`docs/toolchain-upgrade.md\`. Procedure: the \`bump-toolchain\` skill.
 
           A mechanical bump would have arrived as a pull request instead, so something here needs
-          judgement: either lean-fmt no longer builds against upstream, or it builds and the bytes
-          it produces have moved. Those are different problems — read the run's step summary before
-          starting, it separates them.
+          judgement: Linux or Windows checks failed, or canonical output moved. Read the run's step
+          summary before starting; it separates these problems.
 
           Nothing is running against this. Closing it without a bump is a decision to skip the
           release; the probe will not raise it again for this candidate.
