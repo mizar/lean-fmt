@@ -274,6 +274,12 @@ private def parseFileArgs (mode : RunMode) (args : List String) :
       loop mode rest { command with run := { command.run with reflowComments? := some true } }
     | "--no-reflow-comments" :: rest =>
       loop mode rest { command with run := { command.run with reflowComments? := some false } }
+    | "--line-ending" :: value :: rest =>
+      match LineEndingMode.parse? value with
+      | some ending =>
+        loop mode rest { command with run := { command.run with lineEnding? := some ending } }
+      | none => .error "--line-ending expects preserve, lf, or crlf"
+    | ["--line-ending"] => .error "--line-ending expects preserve, lf, or crlf"
     | "--statistics" :: rest => loop mode rest { command with statistics := true }
     | "--watch" :: rest => loop mode rest { command with watch := true }
     | "--poll-interval" :: value :: rest =>
@@ -1452,7 +1458,8 @@ private unsafe def runStreamCommand (mode : RunMode) (command : FileCommand) (fi
               unfixable := command.run.unfixable, extendFixable := command.run.extendFixable,
               preview := command.run.preview }
           unsafeFixes := command.run.unsafeFixes
-          formatCheck := command.run.formatCheck }
+          formatCheck := command.run.formatCheck
+          lineEnding? := command.run.lineEnding? }
   -- The buffer never became a project snapshot, so the CLI that decoded it is the only
   -- holder of the bytes a line/column resolution needs.
   let positions := PositionIndex.ofSource report.path normalized report.findings

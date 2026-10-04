@@ -457,7 +457,7 @@ private def testFormatting (ctx : Ctx) : IO Unit := do
   -- see the modes suite for the full trace.
   let layoutSource ← readFixture ctx "Layout.lean"
   let cleanSource ← readFixture ctx "Clean.lean"
-  let ((narrowEdit, wholeText), code) ←
+  let ((narrowEdit, _), code) ←
     liveSession ctx do
         openDocument (cleanUri ctx) cleanSource
         request 1 "textDocument/formatting" (LspClient.documentParam (cleanUri ctx))
@@ -695,6 +695,51 @@ private def testNoPersistentEvidence (ctx : Ctx) : IO Unit := do
       ensure (!(← (work / ".lean-fmt-cache").pathExists))
           "an LSP session left persistent cache evidence"
 
+private def testLineEndings (ctx : Ctx) : IO Unit := do
+  withScratchDir "lsp-line-endings" fun work => do
+      writeFile (work / "lakefile.lean") "import Lake\nopen Lake DSL\npackage endings\n"
+      copyFile (ctx.root / "lean-toolchain") (work / "lean-toolchain")
+      let lf := "module\n\ndef value : Nat :=\n  1\n"
+      let crlf := lf.replace "\n" "\r\n"
+      let mixed := lf.replace "module\n" "module\r\n"
+      for mode in ["preserve", "lf", "crlf"] do
+        writeFile (work / "lean-fmt.toml") s!"[format]\nline-ending = \"{mode}\"\n"
+        for source in [lf, crlf, mixed] do
+          let uri := System.Uri.pathToUri (work / "Unsaved.lean")
+          let ((), code) ←
+            LspClient.withServer ctx.app work.toString do
+                request 0 "initialize"
+                    (Json.mkObj
+                      [("rootUri", Json.str (System.Uri.pathToUri work)),
+                        ("capabilities", Json.mkObj [])])
+                discard <| awaitResponse 0
+                notify "initialized" (Json.mkObj [])
+                openDocument uri source
+                for (id, method, params) in
+                  [(1, "textDocument/formatting", LspClient.documentParam uri),
+                    (2, "textDocument/rangeFormatting",
+                      Json.mkObj
+                        [("textDocument", Json.mkObj [("uri", Json.str uri)]),
+                          ("range", LspClient.range 2 0 2 0)])] do
+                  request id method params
+                  let edits ← editsOf (← awaitResponse id) "line-ending formatting"
+                  if mode == "preserve" then
+                    ensureEq "canonical input preserves its existing endings without an edit" 0
+                        edits.size
+                  else
+                    ensureEq "forced endings replace even a canonical mixed buffer" 1 edits.size
+                    ensureEq "forced endings apply to the whole output"
+                        (if mode == "lf" then lf else crlf) (strField edits[0]! "newText")
+                    ensureJsonAt edits[0]! [.field "range", .field "start", .field "line"]
+                        (Lean.toJson (0 : Nat))
+                        "forced range formatting starts at the document beginning"
+                    ensureJsonAt edits[0]! [.field "range", .field "end", .field "line"]
+                        (Lean.toJson (4 : Nat)) "forced range formatting reaches the document end"
+                request 90 "shutdown" (Json.mkObj [])
+                discard <| awaitResponse 90
+                notify "exit" (Json.mkObj [])
+          ensureEq "the line-ending session ends cleanly" 0 code
+
 end Lsp
 
 public def main (args : List String) : IO UInt32 := do
@@ -706,7 +751,8 @@ public def main (args : List String) : IO UInt32 := do
         { root, application := (root / ".lake" / "build" / "bin" / "lean-fmt").toString
           configToml }
       let cases : Array Case :=
-        #[{ name := "lifecycle", run := Lsp.testLifecycle ctx },
+        #[{ name := "line-endings", run := Lsp.testLineEndings ctx },
+          { name := "lifecycle", run := Lsp.testLifecycle ctx },
           { name := "initialization-guard", run := Lsp.testInitializationGuard ctx },
           { name := "malformed-recovery", run := Lsp.testMalformedRecovery ctx },
           { name := "unknown-methods", run := Lsp.testUnknownMethods ctx },

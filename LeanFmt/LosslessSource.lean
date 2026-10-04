@@ -27,9 +27,9 @@ structure SourceRange where
 
 /-- The line-ending form observed on disk.
 
-Lean rejects isolated `\r`, so an accepted file's endings are uniformly one form or the other; a
-mixed file is not accepted source. Deliberately *not* part of `LosslessSource`: only a producer
-holding the file's bytes can observe it, and the compiler plugin never does. It belongs to whoever
+LF and CRLF may coexist; the default policy selects CRLF for changed output if any CRLF is present.
+Not part of `LosslessSource`: only a producer holding the file's bytes can observe it, and the
+compiler plugin never does. It belongs to whoever
 read the file; it is what that reader needs to write one back. -/
 inductive LineEndings where
   | lf
@@ -230,8 +230,7 @@ def normalize (raw : String) : String × LineEndings :=
   let normalized := raw.crlfToLf
   (normalized, if normalized == raw then .lf else .crlf)
 
-/-- Reapply the recorded line-ending form. Inverse of `normalize` for accepted source, which cannot
-contain an isolated `\r`. -/
+/-- Reapply the recorded line-ending form. Mixed input selects CRLF; uniform input round-trips. -/
 def denormalize (normalized : String) : LineEndings → String
   | .lf => normalized
   | .crlf => normalized.replace "\n" "\r\n"

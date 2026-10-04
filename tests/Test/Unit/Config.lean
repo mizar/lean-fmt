@@ -674,6 +674,18 @@ private def testProjectPaths : IO Unit :=
     ensure confined.isSome "git selection dropped a source inside the root"
     let outside ← GitSelection.confine root (root / "sub") "lakefile.lean"
     ensure outside.isNone "git selection admitted a source outside the selected root"
+    writeFile (root / "sub" / "lean-fmt.toml") "[format]\nline-ending = \"lf\"\n"
+    let configured ← Discovery.run root none
+    ensureEq "configured line endings reach nested sources" LineEndingMode.lf
+        (configured.configFor "sub/A.lean").format.lineEnding
+    let overridden := configured.overrideLineEnding (some .crlf)
+    ensureEq "CLI line endings override nested settings" LineEndingMode.crlf
+        (overridden.configFor "sub/A.lean").format.lineEnding
+    ensure
+        ((configured.configFor "sub/A.lean").format.identityString !=
+          (overridden.configFor "sub/A.lean").format.identityString)
+        "line-ending selection did not enter cache identity"
+    ensure (LineEndingMode.parse? "native" == none) "invalid line-ending selection was accepted"
 
 /-- The cases this module contributes to the unit runner, in run order. -/
 public def cases : Array Case :=

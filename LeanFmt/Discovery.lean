@@ -380,6 +380,18 @@ def Discovery.overrideReflowComments (discovery : Discovery) (reflow? : Option B
         discovery.configs.map fun (directory, config) =>
           (directory, config.overrideReflowComments flag) }
 
+/-- Apply a publication line-ending override to all resolved configurations. -/
+def Discovery.overrideLineEnding (discovery : Discovery) (mode? : Option LineEndingMode) :
+    Discovery :=
+  match mode? with
+  | none => discovery
+  | some mode =>
+    let applyMode := fun (config : FormatterConfig) =>
+      { config with format := { config.format with lineEnding := mode } }
+    { discovery with
+      fallback := applyMode discovery.fallback
+      configs := discovery.configs.map fun (directory, config) => (directory, applyMode config) }
+
 /-- Run discovery for one project root.
 
 `explicit?` is a `--config` override: it applies to every file, no directory is searched for a nested
