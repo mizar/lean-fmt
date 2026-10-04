@@ -158,7 +158,7 @@ private def testLayerImports (root : System.FilePath) : IO Unit := do
 private def testNoLeanServer (root : System.FilePath) : IO Unit := do
   -- `Lean.Server.Utils` converts client positions **without clamping** them, and an unclamped LSP
   -- position resolves past the end of the buffer. Scoped to this module on purpose:
-  -- `LeanFmt/Analysis.lean` imports `Lean.Server.InfoUtils` and should.
+  -- The frontend uses elaborator information through its frontend imports.
   for line in (← readRepoFile root "LeanFmt/LanguageServer.lean").splitOn "\n" do
     let trimmed := line.trimAsciiStart.toString
     ensure

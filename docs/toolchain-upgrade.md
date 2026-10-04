@@ -26,7 +26,7 @@ move, which is why this checklist exists.
    artifacts or cache entries written under an earlier toolchain. Cache identity includes the toolchain, so a bump
    orphans every entry wholesale by design, and the first run after a bump pays full cost.
 5. **Lake's build internals.** `LeanFmt/Project.lean` runs Lake's own graph rather than shelling out to `lake`, and it
-   reaches three non-`public` declarations through `import all Lake.Build.Run`: `mkJobQueue`, `mkBuildContext'`, and
+   reaches three non-`public` declarations through `import all Lake.Build.Run`: `mkJobQueue`, the context constructor, and
    `Workspace.startBuild`. Everything else is Lake's public surface: `Workspace.runBuild`, `Lake.ensureJob`,
    `Job.mapResult`/`zipWith`/`collectArray`, `Lake.setupServerModule`, the `olean`, `transImports`, and `setup` facets,
    and `Lake.Artifact`/`artifactWithExt`/`Hash.ofString?` for the `leanFmtArtifact` sidecar. The `setup` facet is the
@@ -34,6 +34,11 @@ move, which is why this checklist exists.
    takes `setupServerModule`, because their imports are not the ones on disk. If a bump changes what `presetup` folds
    into `leanOptions`, or moves imports out of `ModulePreSetup`, the two paths stop agreeing for unchanged files and the
    modes suite sees it.
+
+   `lakeContextConstructor` selects Lake's own constructor at compile time: `mkBuildContext'` before 4.35,
+   `mkBuildContext` from 4.35. It parses `Lean.versionStringCore` with `Lake.SemVerCore.parse` and compares numeric
+   versions, so release candidates use their release family's API. Each binary still serves only its exact compiler
+   toolchain; this compatibility branch does not relax the target-project ABI check.
 
    `LeanFmt/Cache.lean` reads Lake's `.trace` files through Lake's own readers —
    `BuildMetadata.fromJson?`, `ModuleOutputDescrs.fromJson?`, and `ArtifactDescr` — plus one more

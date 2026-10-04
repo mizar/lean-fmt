@@ -21,6 +21,8 @@ import Lake.Build.Module
 import Lake.Config.Env
 import Lake.Config.InstallPath
 
+meta import Lake.Util.Version
+
 /-! Lake, held once.
 
 This module owns the workspace load, complete non-`.lake` source selection, the exact module setup,
@@ -470,6 +472,17 @@ private def countTraversal : IO Unit := do
     return
   recordCount "lake_graphs" (← graphTraversals.atomically (modifyGet fun n => (n + 1, n + 1)))
 
+-- Select Lake's context constructor at macro expansion: mkBuildContext' before 4.35,
+-- mkBuildContext from 4.35. Each toolchain's own constructor supplies its context setup.
+local macro "lakeContextConstructor" : term => do
+  let .ok version :=
+    Lake.SemVerCore.parse
+      Lean.versionStringCore | Lean.Macro.throwError "could not parse the compiler's version"
+  if version < ({ major := 4, minor := 35, patch := 0 } : Lake.SemVerCore) then
+    `(Lake.mkBuildContext')
+  else
+    `(Lake.mkBuildContext)
+
 /- One no-build graph's value, awaited job by job so one failure stays at its own position.
 
 `monitorBuild` cannot do that. It returns `.error "build failed"` whenever `MonitorResult.isOk` is
@@ -491,7 +504,7 @@ private def noBuildValuePerJob? {α : Type} (workspace : Lake.Workspace)
   countTraversal
   try
     let jobs ← Lake.mkJobQueue
-    let bctx ← Lake.mkBuildContext' workspace { noBuild := true, verbosity := .quiet } jobs
+    let bctx ← lakeContextConstructor workspace { noBuild := true, verbosity := .quiet } jobs
     let computation ← Lake.Workspace.startBuild bctx build
     let job ←
       match ← computation.wait with
