@@ -46,7 +46,8 @@ git clone --branch v4.34.0 https://github.com/jcreinhold/lean-fmt.git && cd lean
 With elan on `PATH` this installs the matching toolchain itself. `PREFIX=/usr/local` overrides the install location,
 `DESTDIR` stages, `make uninstall` removes.
 
-Windows is untested; nothing in lean-fmt targets a Unix-only interface, and a report either way is useful.
+Linux and Windows share the native Lean application. See [Windows build notes](docs/manual/windows-build.md)
+for Windows-specific setup and known manual build issues.
 
 ## Use
 
