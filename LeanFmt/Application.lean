@@ -2840,8 +2840,8 @@ def describeConfig (requestedRoot : FilePath) (configPath? : Option FilePath) (a
   unless ← System.FilePath.pathExists (System.FilePath.mk argument) do
     throw <| IO.userError s!"selected file does not exist: {argument}"
   let absolute ← IO.FS.realPath (System.FilePath.mk argument)
-  let relative := (Lake.relPathFrom root absolute).toString
-  let relative := if System.Platform.isWindows then relative.replace "\\" "/" else relative
+  let relative? := Project.relativePathFromRoot root absolute
+  let relative := relative?.getD absolute.toString
   -- Timed here as well as in `execute`, and for the same reason: this is the one entry point
   -- that runs discovery and nothing else, so it is how the walk's cost is measured without the
   -- per-file pipeline on top of it.
@@ -2849,11 +2849,8 @@ def describeConfig (requestedRoot : FilePath) (configPath? : Option FilePath) (a
   let discovery ← Discovery.run root configPath?
   recordDuration "discovery" ((← IO.monoNanosNow) - discoveryStarted)
   let (key, config) := discovery.governing relative
-  let outsideRoot :=
-    absolute != root &&
-      !absolute.toString.startsWith (root.toString ++ System.FilePath.pathSeparator.toString)
-  let insideLake :=
-    relative == ".lake" || relative.startsWith ".lake/" || relative.startsWith ".lake\\"
+  let outsideRoot := relative?.isNone
+  let insideLake := Project.insideLakeDirectory relative
   let notLean := absolute.extension != some "lean"
   let gate :=
     if outsideRoot || insideLake || notLean then Discovery.Gate.floor

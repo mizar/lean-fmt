@@ -666,6 +666,43 @@ private def testProjectPaths : IO Unit :=
           "module\n"
     ensureEq "unsaved project paths use discovery coordinates" "sub/New.lean" unsaved.relativePath
     ensureEq "nested configuration reaches unsaved targets" 42 unsaved.config.format.lineWidth
+    if System.Platform.isWindows then
+      let upperRoot := System.FilePath.mk root.toString.toUpper
+      let alternate ←
+        Project.unsavedTarget snapshot.workspace discovery root
+            (upperRoot / "sub" / "New.lean").toString "module\n"
+      ensureEq "root casing cannot change unsaved discovery coordinates" "sub/New.lean"
+          alternate.relativePath
+      ensureEq "root casing cannot bypass nested configuration" 42 alternate.config.format.lineWidth
+      let alternateReport ←
+        Application.describeConfig root none (upperRoot / "sub" / "A.lean").toString
+      ensureEq "root casing cannot change config introspection coordinates" "sub/A.lean"
+          alternateReport.relativePath
+      ensure alternateReport.selected "config introspection rejected a case-varied source"
+      ensureEq "root casing cannot bypass introspected nested configuration" (some "42")
+          ((alternateReport.settings.find? (·.key == "format.line-width")).map (·.value))
+      writeFile (root / ".lake" / "Blocked.lean") "module\n"
+      for lakeDirectory in [".lake", ".LAKE"] do
+        let argument := (upperRoot / lakeDirectory / "NeverSaved.lean").toString
+        let rejected ←
+          try
+            discard <| Project.unsavedTarget snapshot.workspace discovery root argument "module\n"
+            pure false
+          catch error =>
+            ensure (error.toString.contains "selected file is inside the Lake build directory")
+                "case-varied Lake path was rejected for the wrong reason"
+            ensure (error.toString.contains argument) "Lake refusal lost the caller's argument"
+            pure true
+        ensure rejected "root casing cannot bypass the Lake directory exclusion"
+        let diskRejected ←
+          try
+            discard <| Project.load root discovery #[upperRoot / lakeDirectory / "Blocked.lean"]
+            pure false
+          catch error =>
+            ensure (error.toString.contains "selected file is inside the Lake build directory")
+                "case-varied disk Lake path was rejected for the wrong reason"
+            pure true
+        ensure diskRejected "root casing cannot select a disk source in the Lake directory"
     let report ← Application.describeConfig root none (root / "sub" / "A.lean").toString
     ensureEq "config show uses discovery coordinates" "sub/A.lean" report.relativePath
     ensureEq "config show reaches nested settings" (some "42")

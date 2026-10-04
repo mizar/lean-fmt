@@ -223,10 +223,19 @@ private def deduplicate (targets : Array SourceTarget) : Array SourceTarget :=
       else (some target.relativePath, unique.push target)
   unique
 
+-- Containment and relativization must agree on Windows casing. Lake.relPathFrom compares raw
+-- prefixes, so a contained path with differently cased ancestors can remain absolute.
+private def relativePathFromRoot (root path : FilePath) : Option String := do
+  let key := fun (component : String) =>
+    if System.Platform.isWindows then component.toLower else component
+  let rootComponents := root.normalize.components
+  let pathComponents := path.normalize.components
+  unless (pathComponents.take rootComponents.length).map key == rootComponents.map key do
+    none
+  return String.intercalate "/" (pathComponents.drop rootComponents.length)
+
 private def insideRoot (root path : FilePath) : Bool :=
-  let key := fun (p : FilePath) =>
-    if System.Platform.isWindows then p.toString.toLower else p.toString
-  key path == key root || (key path).startsWith (key root ++ FilePath.pathSeparator.toString)
+  (relativePathFromRoot root path).isSome
 
 /-- Whether a root-relative path lies inside Lake's build directory.
 
@@ -235,23 +244,22 @@ configuration key, no `--config`, no explicit path, no `force-exclude` setting. 
 build outputs and vendored dependency sources; writing there corrupts a build the user did not ask us
 to touch. -/
 private def insideLakeDirectory (relativePath : String) : Bool :=
+  let relativePath := if System.Platform.isWindows then relativePath.toLower else relativePath
   relativePath == ".lake" || relativePath.startsWith ".lake/" || relativePath.startsWith ".lake\\"
 
 private def snapshotTarget (workspace : Lake.Workspace) (discovery : Discovery.Discovery)
     (root path : FilePath) : IO SourceTarget := do
   let path ← IO.FS.realPath path
-  unless insideRoot root path do
-    throw <| IO.userError s!"selected file is outside the project root: {path}"
+  let some relativePath :=
+    relativePathFromRoot root
+      path | throw <| IO.userError s!"selected file is outside the project root: {path}"
   unless path.extension == some "lean" do
     throw <| IO.userError s!"selected file is not a Lean source: {path}"
   -- Gate 1 runs here, beside the containment and extension checks, rather than only in
   -- `discoverPaths`: both path forms reach this operation, and only the discovery form used to be
   -- filtered — so `format .lake/packages/dep/Dep.lean` wrote a dependency's source.
-  if insideLakeDirectory (Lake.relPathFrom root path).toString then
+  if insideLakeDirectory relativePath then
     throw <| IO.userError s!"selected file is inside the Lake build directory: {path}"
-  let relativePath := (Lake.relPathFrom root path).toString
-  let relativePath :=
-    if System.Platform.isWindows then relativePath.replace "\\" "/" else relativePath
   return {
       module? := workspace.findModuleBySrc? path
       path
@@ -307,13 +315,11 @@ def unsavedTarget (workspace : Lake.Workspace) (discovery : Discovery.Discovery)
   let spelling := spelling?.getD argument
   let root := resolveLexically root
   let candidate := resolveLexically (if written.isAbsolute then written else root / written)
-  unless insideRoot root candidate do
-    throw <| IO.userError s!"selected file is outside the project root: {spelling}"
+  let some relativePath :=
+    relativePathFromRoot root
+      candidate | throw <| IO.userError s!"selected file is outside the project root: {spelling}"
   unless candidate.extension == some "lean" do
     throw <| IO.userError s!"selected file is not a Lean source: {spelling}"
-  let relativePath := (Lake.relPathFrom root candidate).toString
-  let relativePath :=
-    if System.Platform.isWindows then relativePath.replace "\\" "/" else relativePath
   if insideLakeDirectory relativePath then
     throw <| IO.userError s!"selected file is inside the Lake build directory: {spelling}"
   let path ←
