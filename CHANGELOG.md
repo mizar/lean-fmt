@@ -8,6 +8,40 @@ notes are on the [releases page](https://github.com/jcreinhold/lean-fmt/releases
 Releases are named for the Lean toolchain they serve. Releases through 0.7.1 used semantic versions and a compatibility
 table; 0.7.1 is the last of those and serves Lean `v4.34.0-rc1`.
 
+## 4.34.0 — 2026-10-04
+
+### Upgrading
+
+This release serves Lean `v4.34.0`. Move your `lean-toolchain` to `leanprover/lean4:v4.34.0` and re-point the
+dependency at the matching tag:
+
+```lean
+require «lean-fmt» from git
+  "https://github.com/jcreinhold/lean-fmt" @ "v4.34.0"
+```
+
+Then `lake update «lean-fmt»`. Cached results from the rc2 build are not carried over — cache identity includes the
+toolchain — so the first run after the move pays full cost, once.
+
+### Added
+
+- Output line endings can be selected with `[format] line-ending = "preserve"`, `"lf"`, or `"crlf"`, or overridden
+  with `--line-ending`. Explicit LF/CRLF conversion applies even when no other change is needed, including stdin
+  output, editor formatting, and fix-all code actions. Ranged formatting applies forced line endings to the whole
+  output.
+- CI runs on pushes to `dev` and `dev/**` as well as `main`, and on pull requests. Windows CI checks the pinned
+  toolchain and the dynamically selected next toolchain.
+
+### Fixed
+
+- Windows path handling now resolves nested configuration consistently for files and unsaved buffers. File
+  replacement preserves the source ACL and refuses read-only files. Use `lake exe lean-fmt` on Windows; see
+  [Windows build notes](docs/manual/windows-build.md) for setup and the remaining upstream manual build issues.
+- Editor fix-all code actions honor forced CRLF conversion for canonical buffers containing mixed LF/CRLF endings.
+
+The default line-ending policy is unchanged: changed output uses CRLF if the input contains any CRLF, and LF
+otherwise. An otherwise unchanged mixed file is left alone.
+
 ## 4.34.0-rc2 — 2026-08-23
 
 ### Upgrading
