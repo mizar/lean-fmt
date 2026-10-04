@@ -736,6 +736,25 @@ private def testLineEndings (ctx : Ctx) : IO Unit := do
                         "forced range formatting starts at the document beginning"
                     ensureJsonAt edits[0]! [.field "range", .field "end", .field "line"]
                         (Lean.toJson (4 : Nat)) "forced range formatting reaches the document end"
+                request 3 "textDocument/codeAction"
+                    (Json.mkObj
+                      [("textDocument", Json.mkObj [("uri", Json.str uri)]),
+                        ("range", LspClient.range 0 0 4 0),
+                        ("context",
+                          Json.mkObj
+                            [("diagnostics", Json.arr #[]),
+                              ("only", Lean.toJson #["source.fixAll"])])])
+                let actions ← editsOf (← awaitResponse 3) "line-ending fix-all"
+                if mode == "preserve" then
+                  ensureEq "canonical input needs no fix-all action" 0 actions.size
+                else
+                  ensureEq "forced endings offer a fix-all action for every input form" 1
+                      actions.size
+                  ensureJsonAt actions[0]!
+                      [.field "edit", .field "documentChanges", .index 0, .field "edits", .index 0,
+                        .field "newText"]
+                      (Lean.toJson (if mode == "lf" then lf else crlf))
+                      "fix-all applies forced endings to the whole buffer"
                 request 90 "shutdown" (Json.mkObj [])
                 discard <| awaitResponse 90
                 notify "exit" (Json.mkObj [])

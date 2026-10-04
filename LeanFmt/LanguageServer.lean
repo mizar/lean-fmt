@@ -1076,7 +1076,9 @@ private def handleCodeAction (session : Session) (id : RequestID) (params : Json
           session.sink.log 3 s!"lean-fmt could not compute fix-all for {uri}: {error}"
           pure none
       if let some report := fixed? then
-        if report.changed then
+        -- Reconstructed targets no longer carry mixed ending locations. Like formatting, an
+        -- explicit conversion must publish the whole buffer even when `changed` is false.
+        if report.changed || target.config.format.lineEnding != .preserve then
           if let some output := report.output then
             actions :=
               actions.push

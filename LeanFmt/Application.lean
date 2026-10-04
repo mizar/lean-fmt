@@ -2187,7 +2187,7 @@ structure StreamReport where
   status : String
   findings : Array Finding := #[]
   diagnostics : Array String := #[]
-  /-- The bytes to stream, in the buffer's own line-ending form. `none` for a non-emitting mode
+  /-- The bytes to stream, under the selected line-ending policy. `none` for a non-emitting mode
   (`check`, `format --check`) and for a buffer that did not analyze — a broken buffer streams
   nothing rather than echoing its input, so a shell redirect cannot write it back over a good
   file. -/
