@@ -107,6 +107,26 @@ instance : ToString MagicTrailingComma where
     | .respect => "respect"
     | .ignore => "ignore"
 
+/-- How publication chooses LF or CRLF. `preserve` selects CRLF if the input contains any CRLF,
+and LF otherwise; it does not preserve each ending of a mixed input when publishing a change. -/
+inductive LineEndingMode where
+  | preserve
+  | lf
+  | crlf
+  deriving BEq, Inhabited, Repr, Lean.ToJson, Lean.FromJson
+
+instance : ToString LineEndingMode where
+  toString
+    | .preserve => "preserve"
+    | .lf => "lf"
+    | .crlf => "crlf"
+
+def LineEndingMode.parse? : String → Option LineEndingMode
+  | "preserve" => some .preserve
+  | "lf" => some .lf
+  | "crlf" => some .crlf
+  | _ => none
+
 /-- The `[format]` section: settings that change the **canonical bytes** a run produces.
 
 The section split marks the cache-identity boundary, not a cosmetic grouping:
@@ -123,6 +143,7 @@ structure FormatConfig where private mk ::
   *constant* still invalidates — a rebuild changes the bytes — but a *runtime* override changes
   output without touching the binary. Hence `identityString`. -/
   lineWidth : Nat := 100
+  lineEnding : LineEndingMode := .preserve
   /-- Inline comments containing any of these phrases are pinned (`pinned-comments`), default
   `["shake: keep"]` : the formatter never moves them and never splits their line, even when the
   code alone overflows — a pinned directive must not dangle off a construct it annotates. -/
@@ -160,7 +181,8 @@ def FormatConfig.identityString (format : FormatConfig) : String :=
     format.pinnedComments.foldl (init := "") fun acc phrase => acc ++ s!"\n{phrase.length}:{phrase}"
   let groups :=
     format.importGroups.foldl (init := "") fun acc grp => acc ++ s!"\n{grp.length}:{grp}"
-  s!"line-width={format.lineWidth}{phrases}\ndeclaration-body={format.declarationBody}\n\
+  s!"line-width={format.lineWidth}{phrases}\nline-ending={format.lineEnding}\n\
+    declaration-body={format.declarationBody}\n\
     declaration-where={format.declarationWhere}\n\
     empty-structure-instance={format.emptyStructureInstance}\n\
     magic-trailing-comma={format.magicTrailingComma}\n\
@@ -378,6 +400,7 @@ private structure PartialConfig where
   respectGitignore? : Option Bool := none
   preview? : Option Bool := none
   lineWidth? : Option Nat := none
+  lineEnding? : Option LineEndingMode := none
   pinnedComments? : Option (Array String) := none
   reflowComments? : Option Bool := none
   declarationBody? : Option DeclarationBody := none
@@ -423,6 +446,7 @@ private def PartialConfig.compose (parent child : PartialConfig) : PartialConfig
   respectGitignore? := orParent child.respectGitignore? parent.respectGitignore?
   preview? := orParent child.preview? parent.preview?
   lineWidth? := orParent child.lineWidth? parent.lineWidth?
+  lineEnding? := orParent child.lineEnding? parent.lineEnding?
   reflowComments? := orParent child.reflowComments? parent.reflowComments?
   pinnedComments? := orParent child.pinnedComments? parent.pinnedComments?
   declarationBody? := orParent child.declarationBody? parent.declarationBody?
@@ -470,6 +494,7 @@ private def PartialConfig.resolve (config : PartialConfig) : Except String Forma
       respectGitignore := config.respectGitignore?.getD true
       format :=
         { lineWidth := config.lineWidth?.getD 100
+          lineEnding := config.lineEnding?.getD .preserve
           pinnedComments := config.pinnedComments?.getD #["shake: keep"]
           reflowComments := config.reflowComments?.getD false
           declarationBody := config.declarationBody?.getD .nextLine
@@ -639,7 +664,7 @@ private def parseFile (anchor file : String) (fileMap : Lean.FileMap) (table : L
             preview? := some flag, origins }
       -- These `[format]` keys are new, so they have no legacy spelling to protect: a top-level
       -- use is an error rather than a notice, so the keys never acquire an ambiguous section.
-      | "line-width" | "pinned-comments" | "reflow-comments" | "declaration-body" |
+      | "line-width" | "line-ending" | "pinned-comments" | "reflow-comments" | "declaration-body" |
         "declaration-where" | "empty-structure-instance" | "magic-trailing-comma" |
         "import-layout" | "import-groups" =>
         throw s!"configuration key '{key}' belongs in the [format] section"
@@ -651,6 +676,14 @@ private def parseFile (anchor file : String) (fileMap : Lean.FileMap) (table : L
   for (key, value) in formatSection do
     let origins := config.origins.push (s!"format.{key}", file, valueLine fileMap value)
     match key with
+    | "line-ending" =>
+      let .string _ spelling := value | throw "configuration key 'line-ending' expects a string"
+      let some mode :=
+        LineEndingMode.parse?
+          spelling | throw "configuration key 'line-ending' expects preserve, lf, or crlf"
+      config :=
+        { config with
+          lineEnding? := some mode, origins }
     | "line-width" =>
       let .integer _ width := value | throw "configuration key 'line-width' expects an integer"
       unless 1 ≤ width && width ≤ 1000 do
@@ -942,6 +975,7 @@ def FormatterConfig.describe (config : FormatterConfig) : Array (String × Strin
     ("respect-gitignore", toString config.respectGitignore, winner "respect-gitignore"),
     ("preview", toString config.preview, winner "preview"),
     ("format.line-width", toString config.format.lineWidth, winner "format.line-width"),
+    ("format.line-ending", toString config.format.lineEnding, winner "format.line-ending"),
     ("format.pinned-comments", renderStrings config.format.pinnedComments,
       winner "format.pinned-comments"),
     ("format.reflow-comments", toString config.format.reflowComments,

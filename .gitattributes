@@ -1,3 +1,7 @@
+# Check out repository text sources and byte-exact text goldens with LF. Product tests generate
+# CRLF and mixed inputs explicitly, independently of the user's core.autocrlf setting.
+* text=auto eol=lf
+
 # This fixture deliberately contains trailing whitespace to exercise FMT001.
 tests/fixtures/check/Findings.lean whitespace=-trailing-space
 # These suppression fixtures deliberately contain trailing whitespace to exercise FMT001.

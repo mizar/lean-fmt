@@ -37,7 +37,7 @@ invokes them in. -/
 public def repoRoot : IO System.FilePath := do
   let result ← runProc "git" #["rev-parse", "--show-toplevel"]
   ensure (result.exitCode == 0) s!"git rev-parse failed:\n{result.stderr}"
-  return ⟨result.stdout.trimAscii.toString⟩
+  return (System.FilePath.mk result.stdout.trimAscii.toString).normalize
 
 /-- Create a scratch directory named after `suite` under the git-ignored `tests/.scratch/`, run
 `f` in it, remove it afterwards. -/

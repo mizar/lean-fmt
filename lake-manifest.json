@@ -3,4 +3,4 @@
  "packages": [],
  "name": "«lean-fmt»",
  "lakeDir": ".lake",
- "fixedToolchain": false}
+ "fixedToolchain": true}

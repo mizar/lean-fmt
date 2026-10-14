@@ -77,6 +77,7 @@ structure RunRequest where
   /-- `--reflow-comments` / `--no-reflow-comments`: a command-line override of the
   configuration's `reflow-comments`. `none` leaves every file's configuration as written. -/
   reflowComments? : Option Bool := none
+  lineEnding? : Option LineEndingMode := none
   /-- Apply unsafe fixes too, not just safe ones. Decides which fixes `fix` admits into its patch
   (and `check`'s preview of it), never relaxing validation or conflict rejection. The
   rendering modes carry no rule fix — `format` publishes only layout, `diff` diffs only
@@ -1143,11 +1144,35 @@ private def runBeforeWriteHook (path : FilePath) : IO Unit := do
 
 private def publishAtomic (path : FilePath) (original output : String) : IO (Except String Unit) :=
   do
-  let mode ← accessMode path
+  let mode ←
+    if System.Platform.isWindows then
+      pure none
+    else
+      some <$> accessMode path
   let temporary ← publicationTemp path
   try
     IO.FS.writeFile temporary output
-    IO.Prim.setAccessRights temporary mode.toUInt32
+    if let some mode := mode then
+      IO.Prim.setAccessRights temporary mode.toUInt32
+    else
+      -- Lean exposes neither Windows ACLs nor the read-only attribute. Preserve the ACL on the
+      -- replacement, and refuse read-only sources before renaming over them.
+      let permissions ←
+        IO.Process.output
+            { cmd := "powershell.exe"
+              args :=
+                #["-NoProfile", "-NonInteractive", "-Command",
+                  "$ErrorActionPreference = 'Stop'; \
+          if (([IO.File]::GetAttributes($env:LEAN_FMT_PERMISSION_SOURCE) -band \
+          [IO.FileAttributes]::ReadOnly) -ne 0) \
+          { throw 'source is read-only' }; \
+          [IO.File]::SetAccessControl($env:LEAN_FMT_PERMISSION_TARGET, \
+          [IO.File]::GetAccessControl($env:LEAN_FMT_PERMISSION_SOURCE))"]
+              env :=
+                #[("LEAN_FMT_PERMISSION_SOURCE", some path.toString),
+                  ("LEAN_FMT_PERMISSION_TARGET", some temporary.toString)] }
+      unless permissions.exitCode == 0 do
+        throw <| IO.userError s!"could not preserve source permissions: {permissions.stderr}"
     runBeforeWriteHook path
     unless (← IO.FS.readFile path) == original do
       IO.FS.removeFile temporary
@@ -1169,12 +1194,14 @@ private def validationReport (snapshot : SourceSnapshot) (findings : Array Findi
   | some _ => none
   | none => some (baseReport snapshot "rejected" findings validation.diagnostics)
 
-/- Findings index the normalized source, so edits are prepared against it and the result is returned
-to the file's own line-ending form on the way out. Preparing edits against the raw bytes would place
-every edit past its intended offset in a CRLF file. -/
+/- Findings index the normalized source, so edits are prepared against it and the result uses the
+selected line-ending policy on output. Preparing edits against raw CRLF bytes would shift offsets
+after each CRLF pair. -/
 private structure PreparedFile where
   findings : Array Finding
   normalized : String
+  original : String
+  forceLineEnding : Bool
   lineEndings : LineEndings
   patch : Patch
   /-- Reported findings whose fix is unsafe and was not admitted into `patch` (opt-in was off):
@@ -1185,7 +1212,7 @@ private structure PreparedFile where
   /-- FMT004 candidates withheld by exposure-changing modifiers or positive defining uses (see `FileReport.withheldRedundant`). -/
   withheldRedundant : Nat
 
-/-- The formatted text in the file's own line-ending form, i.e. what a write would produce. -/
+/-- The formatted text under the selected line-ending policy, i.e. the publication candidate. -/
 private def PreparedFile.output (prepared : PreparedFile) : String :=
   LosslessSource.denormalize prepared.patch.formatted prepared.lineEndings
 
@@ -1195,9 +1222,23 @@ private def PreparedFile.output (prepared : PreparedFile) : String :=
 question only while the patch was based on the file's own bytes. Based on canonical text it is a
 different question and the wrong one: a file needing layout but no fixes has an empty edit set, so
 `patch.changed` is `false` while the output differs on every line. Comparing the output to the
-source is the question all three callers actually meant. -/
+source detects layout changes. Explicit line-ending modes also compare the publication candidate
+to the original bytes; preserve mode leaves an otherwise unchanged mixed file untouched. -/
 private def PreparedFile.changed (prepared : PreparedFile) : Bool :=
-  prepared.patch.formatted != prepared.normalized
+  prepared.patch.formatted != prepared.normalized ||
+    (prepared.forceLineEnding && prepared.output != prepared.original)
+
+private def PreparedFile.diffSource (prepared : PreparedFile) : String :=
+  if prepared.forceLineEnding then prepared.original else prepared.normalized
+
+private def PreparedFile.diffOutput (prepared : PreparedFile) : String :=
+  if prepared.forceLineEnding then prepared.output else prepared.patch.formatted
+
+private def publicationLineEndings (format : FormatConfig) (observed : LineEndings) : LineEndings :=
+  match format.lineEnding with
+  | .preserve => observed
+  | .lf => .lf
+  | .crlf => .crlf
 
 /-- Order findings by position, then code, so a report is deterministic regardless of which layer
 produced a finding (a rule, or the suppression projection's `FMT900`/`FMT901`). -/
@@ -1369,6 +1410,7 @@ private def prepareFileCore (plan : RulePlan) (renderCanonical unsafeFixes : Boo
             else "broken")
           #[] analysis.diagnostics)
   let (normalized, lineEndings) := LosslessSource.normalize snapshot.source
+  let lineEndings := publicationLineEndings snapshot.config.format lineEndings
   -- Import findings (`reportImports`, normalized coordinates) join the engine's findings *before*
   -- selection, so `--select imports`, per-file ignores, and suppression treat them like any rule.
   -- FMT003 applies at original coordinates and needs no canonical recomputation: the fix patch
@@ -1410,7 +1452,16 @@ private def prepareFileCore (plan : RulePlan) (renderCanonical unsafeFixes : Boo
         if !fix.applicability.admitted unsafeFixes && fix.applicability == .unsafe then total + 1
         else total
       | none => total
-  return { findings, normalized, lineEndings, patch, withheldUnsafe, suppressed, withheldRedundant }
+  return {
+      findings
+      normalized
+      original := snapshot.source
+      forceLineEnding := snapshot.config.format.lineEnding != .preserve
+      lineEndings
+      patch
+      withheldUnsafe
+      suppressed
+      withheldRedundant }
 
 /-- Classify graph candidates against the original header and exact declaration-use evidence.
 Every mode shares this operation. Missing evidence produces a visible failure and no write. -/
@@ -1476,10 +1527,11 @@ private def previewFile (mode : PreviewMode) (plan : RulePlan) (unsafeFixes : Bo
           withheldUnsafe, suppressed, withheldRedundant }
     | .diff =>
       if prepared.changed then
-        -- Both sides of the diff are normalized: a CRLF file must not read as every line changed.
+        -- Preserve mode compares normalized text; an explicit conversion compares published bytes
+        -- so a newline-only change remains visible.
         return { (baseReport snapshot "would-diff" findings) with
             diff :=
-              some (unifiedDiff snapshot.relativePath prepared.normalized prepared.patch.formatted),
+              some (unifiedDiff snapshot.relativePath prepared.diffSource prepared.diffOutput),
             withheldUnsafe, suppressed, withheldRedundant }
       return { (baseReport snapshot "clean" findings) with
           withheldUnsafe, suppressed, withheldRedundant }
@@ -1904,6 +1956,7 @@ def execute (request : RunRequest) : IO RunOutcome := do
   let discoveryStarted ← IO.monoNanosNow
   let discovery ← Discovery.run root configPath?
   let discovery := discovery.overrideReflowComments request.reflowComments?
+  let discovery := discovery.overrideLineEnding request.lineEnding?
   recordDuration "discovery" ((← IO.monoNanosNow) - discoveryStarted)
   -- The fallback plan is resolved first and unconditionally, so an invalid CLI selector is still
   -- a hard error on a run that selects no files at all — the behavior before configuration became
@@ -2159,13 +2212,14 @@ structure StreamRequest where
   selection : CliSelection := {}
   unsafeFixes : Bool := false
   formatCheck : Bool := false
+  lineEnding? : Option LineEndingMode := none
 
 structure StreamReport where
   path : String
   status : String
   findings : Array Finding := #[]
   diagnostics : Array String := #[]
-  /-- The bytes to stream, in the buffer's own line-ending form. `none` for a non-emitting mode
+  /-- The bytes to stream, under the selected line-ending policy. `none` for a non-emitting mode
   (`check`, `format --check`) and for a buffer that did not analyze — a broken buffer streams
   nothing rather than echoing its input, so a shell redirect cannot write it back over a good
   file. -/
@@ -2259,8 +2313,7 @@ def ExactRun.streamEnvelope (run : ExactRun) (target : Project.SourceTarget) (pl
       return { base with
           status := "would-diff"
           changed := true
-          diff :=
-            some (unifiedDiff target.relativePath prepared.normalized prepared.patch.formatted) }
+          diff := some (unifiedDiff target.relativePath prepared.diffSource prepared.diffOutput) }
     | .fix =>
       unless prepared.changed do
         return { base with output := some prepared.output }
@@ -2276,7 +2329,8 @@ def ExactRun.streamEnvelope (run : ExactRun) (target : Project.SourceTarget) (pl
         | some result => (result.text, some result.requested, some result.actual, result.marks)
         | none => (prepared.patch.formatted, none, none, marks)
       let output := LosslessSource.denormalize text prepared.lineEndings
-      let changed := text != prepared.normalized
+      let changed :=
+        text != prepared.normalized || (prepared.forceLineEnding && output != target.source)
       if formatCheck then
         return { base with
             status := if changed then "would-format" else "clean"
@@ -2324,6 +2378,7 @@ def stream (request : StreamRequest) : IO StreamReport := do
   let configPath? :=
     request.configPath?.map fun path => if path.isAbsolute then path else root / path
   let discovery ← Discovery.run root configPath?
+  let discovery := discovery.overrideLineEnding request.lineEnding?
   let project ← Project.loadWorkspaceOnly root
   let target ←
     Project.unsavedTarget project.workspace discovery root request.filename request.source
@@ -2357,6 +2412,7 @@ reaches their file.
 def ExactRun.organizeSnapshot (run : ExactRun) (target : Project.SourceTarget)
     (cancel? : Option Std.CancellationToken := none) : IO (Except String (Option String)) := do
   let (normalized, lineEndings) := LosslessSource.normalize target.source
+  let lineEndings := publicationLineEndings target.config.format lineEndings
   let some header ← Imports.parseHeaderModel normalized | return .ok none
   let output :=
     LosslessSource.denormalize
@@ -2817,7 +2873,8 @@ def describeConfig (requestedRoot : FilePath) (configPath? : Option FilePath) (a
   unless ← System.FilePath.pathExists (System.FilePath.mk argument) do
     throw <| IO.userError s!"selected file does not exist: {argument}"
   let absolute ← IO.FS.realPath (System.FilePath.mk argument)
-  let relative := (Lake.relPathFrom root absolute).toString
+  let relative? := Project.relativePathFromRoot root absolute
+  let relative := relative?.getD absolute.toString
   -- Timed here as well as in `execute`, and for the same reason: this is the one entry point
   -- that runs discovery and nothing else, so it is how the walk's cost is measured without the
   -- per-file pipeline on top of it.
@@ -2825,11 +2882,8 @@ def describeConfig (requestedRoot : FilePath) (configPath? : Option FilePath) (a
   let discovery ← Discovery.run root configPath?
   recordDuration "discovery" ((← IO.monoNanosNow) - discoveryStarted)
   let (key, config) := discovery.governing relative
-  let outsideRoot :=
-    absolute != root &&
-      !absolute.toString.startsWith (root.toString ++ System.FilePath.pathSeparator.toString)
-  let insideLake :=
-    relative == ".lake" || relative.startsWith ".lake/" || relative.startsWith ".lake\\"
+  let outsideRoot := relative?.isNone
+  let insideLake := Project.insideLakeDirectory relative
   let notLean := absolute.extension != some "lean"
   let gate :=
     if outsideRoot || insideLake || notLean then Discovery.Gate.floor

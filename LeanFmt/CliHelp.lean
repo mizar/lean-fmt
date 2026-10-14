@@ -141,6 +141,9 @@ private def optReflowComments : HelpEntry :=
   ⟨"--[no-]reflow-comments",
     "override reflow-comments: rewrap overflowing standalone `--` comment blocks"⟩
 
+private def optLineEnding : HelpEntry :=
+  ⟨"--line-ending FORM", "preserve (default), lf, or crlf; override publication line endings"⟩
+
 private def optFixable : HelpEntry :=
   ⟨"--fixable SELECTOR", "restrict which rules' fixes apply (repeatable)"⟩
 
@@ -252,7 +255,7 @@ private def commandHelps : Array CommandHelp :=
         #["lean-fmt check [--fix] [OPTIONS] [FILE...]", "lean-fmt check - --stdin-filename PATH"]
       sections :=
         #[targetSection, ruleSelectionSection, fixSelectionSection optUnsafeFixes,
-          ("layout options:", #[optReflowComments]), outputSection optOutputFormat,
+          ("layout options:", #[optReflowComments, optLineEnding]), outputSection optOutputFormat,
           executionSection true, stdinSection false]
       notes :=
         #["a bare `check` previews the fixes `--fix` would apply; the fix-selection flags shape \
@@ -272,7 +275,8 @@ private def commandHelps : Array CommandHelp :=
           "lean-fmt format - --stdin-filename PATH [--range S:E | --range-lines L:C-L:C]"]
       sections :=
         #[targetSection, ruleSelectionSection,
-          ("format options:", #[optCheckFormat, optDiffFormat, optNoValidate, optReflowComments]),
+          ("format options:",
+            #[optCheckFormat, optDiffFormat, optNoValidate, optReflowComments, optLineEnding]),
           outputSection optOutputFormat, executionSection true, stdinSection true]
       notes :=
         #["`--range`/`--range-lines` are valid only with the `-` stdin target.",
