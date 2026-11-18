@@ -1,5 +1,13 @@
 # Configuration reference
 
+`[format] line-ending = "preserve"` is the default: LF input stays LF, and any CRLF in the input
+selects CRLF when changed text is written. Mixed LF/CRLF input is accepted. An unchanged file is
+left alone. Set `line-ending = "lf"` or `"crlf"`, or pass `--line-ending lf` / `--line-ending crlf`
+to `format` or `check --fix`, to force a form even when only the line endings need changing.
+The CLI flag overrides configuration; `--line-ending preserve` restores the default policy.
+Previews report newline-only changes without writing. The setting also applies to stdin output
+and editor formatting; forced line endings cover the whole output, including ranged formatting.
+
 Configuration is optional. Without a config file, every root-relative `.lean` file outside `.lake` is checked with
 default settings.
 
@@ -19,6 +27,7 @@ preview = false                      # enable preview-stage rules
 
 [format]                             # settings that change the formatted bytes
 line-width = 100                     # 1..1000
+line-ending = "preserve"             # or "lf" / "crlf"
 pinned-comments = ["shake: keep"]    # inline comments that never move and never split their line
 reflow-comments = false              # rewrap standalone `--` blocks whose rows overflow the margin
 declaration-body = "next-line"       # or "same-line"

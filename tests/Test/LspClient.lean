@@ -85,7 +85,7 @@ public partial def awaitDiagnostics (uri : String) (budget : Nat := 64) :
 public def initializeSession (root : String) (options : Json := Json.mkObj []) : IpcM Answer := do
   request 0 "initialize"
       (Json.mkObj
-        [("processId", Json.null), ("rootUri", Json.str s!"file://{root}"),
+        [("processId", Json.null), ("rootUri", Json.str (System.Uri.pathToUri root)),
           ("capabilities", Json.mkObj []), ("initializationOptions", options)])
   let answer ← awaitResponse 0
   notify "initialized" (Json.mkObj [])

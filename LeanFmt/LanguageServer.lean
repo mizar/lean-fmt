@@ -280,7 +280,7 @@ structure Document where
   relativePath : String
   text : FileMap
   /-- Decided once, at open, from the bytes the client first sent; edits do not change a
-  file's line-ending convention, and output is denormalized back to it. -/
+  file's default line-ending convention; explicit format settings override it. -/
   lineEndings : LineEndings
   version : Int
   /-- One bounded last-good frontend session for this document's normalized lineage. -/
@@ -462,12 +462,12 @@ def admit (session : Session) (uri : String) : IO (Except Rejection (FilePath ×
         ({(discovery.explain target.relativePath).describe}): {uri}"
     return .ok (target.path, target.relativePath)
 
-/-- The target a request runs against: the open document's bytes at its own identity.
-
-Built per request rather than stored, so there is one copy of the buffer in the process. -/
+/-- The target a request runs against: the normalized open document, with its default line-ending
+convention reapplied. Mixed line-ending locations are not retained. The target is built per request
+rather than stored on the document. -/
 def Session.targetOf (session : Session) (document : Document) : IO Project.SourceTarget := do
   Project.unsavedTarget session.project.workspace (← session.discovery.get) session.root
-      document.path.toString document.source
+      document.path.toString (LosslessSource.denormalize document.source document.lineEndings)
 
 /-! ## Text synchronization
 
@@ -892,7 +892,7 @@ private def analyzeAndPublish (session : Session) (uri : String) (version : Int)
 
 /-! ## Formatting -/
 
-/-- A whole-document replacement, in the document's own line endings.
+/-- A whole-document replacement, with the selected line-ending policy.
 
 `Lsp.TextEdit`'s range is in client coordinates, so the replaced span is the whole buffer as
 the *client* measures it — `wholeDocument`, not a byte count. -/
@@ -950,6 +950,11 @@ private def handleFormatting (session : Session) (id : RequestID) (params : Json
       session.sink.fail id .internalError
           s!"lean-fmt could not format {uri}: {String.intercalate "; " report.diagnostics.toList}"
     | some output =>
+      if target.config.format.lineEnding != .preserve then
+        -- Normalized buffers do not retain the locations of mixed line endings. An explicit
+        -- conversion replaces the whole buffer even when its normalized layout is unchanged.
+        session.sink.respond id (Json.arr #[wholeEdit document output])
+        return
       unless report.changed do
         session.sink.respond id (Json.arr #[])
         return
@@ -1071,7 +1076,9 @@ private def handleCodeAction (session : Session) (id : RequestID) (params : Json
           session.sink.log 3 s!"lean-fmt could not compute fix-all for {uri}: {error}"
           pure none
       if let some report := fixed? then
-        if report.changed then
+        -- Reconstructed targets no longer carry mixed ending locations. Like formatting, an
+        -- explicit conversion must publish the whole buffer even when `changed` is false.
+        if report.changed || target.config.format.lineEnding != .preserve then
           if let some output := report.output then
             actions :=
               actions.push

@@ -417,6 +417,49 @@ private def testLeadingStart : IO Unit := do
   ensureEq "a leaf with no original position is not a cursor" 64
       (startOf (some { node := 0, start := 0, stop := 0, info := .missing }))
 
+private def testAtomicPublication : IO Unit :=
+  withTempDir fun root => do
+    let path := root / "source ' 日本語.lean"
+    let original := "module\r\n\r\ndef  value :Nat:=1\r\n"
+    let formatted := "module\r\n\r\ndef value : Nat := 1\r\n"
+    IO.FS.writeFile path original
+    let result ← Application.publishAtomic path original formatted
+    match result with
+    | .ok () =>
+      pure ()
+    | .error message =>
+      throw <| IO.userError message
+    ensureEq "atomic publication preserves the candidate bytes" formatted (← IO.FS.readFile path)
+    let stale ← Application.publishAtomic path original "stale overwrite\n"
+    match stale with
+    | .error _ =>
+      pure ()
+    | .ok () =>
+      throw <| IO.userError "atomic publication accepted stale source"
+    ensureEq "stale publication changed the source" formatted (← IO.FS.readFile path)
+    ensureEq "publication left temporary files" 1 (← root.readDir).size
+
+private def testLineEndingModes : IO Unit := do
+  let lf := "module\n\ndef value : Nat :=\n  1\n"
+  let crlf := lf.replace "\n" "\r\n"
+  let mixed := "module\r\n\ndef value : Nat :=\r\n  1\n"
+  for raw in [lf, crlf, mixed] do
+    let (normalized, observed) := LosslessSource.normalize raw
+    ensureEq "all ending forms share parser coordinates" lf normalized
+    ensureEq "any CRLF selects CRLF" (if raw == lf then LineEndings.lf else .crlf) observed
+    let .ok patch := preparePatch normalized #[] | throw <| IO.userError "empty patch was refused"
+    for mode in [LineEndingMode.preserve, .lf, .crlf] do
+      let endings := Application.publicationLineEndings { lineEnding := mode } observed
+      let prepared : Application.PreparedFile :=
+        { findings := #[], normalized, original := raw, forceLineEnding := mode != .preserve,
+          lineEndings := endings, patch, withheldUnsafe := 0, suppressed := 0,
+          withheldRedundant := 0 }
+      let expected := if endings == .lf then lf else crlf
+      ensureEq "publication applies the selected ending form" expected prepared.output
+      ensureEq "explicit newline-only changes are detected" (mode != .preserve && expected != raw)
+          prepared.changed
+    ensureEq "normalization is stable" normalized (LosslessSource.normalize normalized).1
+
 /-- The cases this module contributes to the unit runner, in run order. -/
 public def cases : Array Case :=
   #[{ name := "testLosslessSource", run := testLosslessSource },
@@ -425,6 +468,8 @@ public def cases : Array Case :=
     { name := "testNodeDivergenceSource", run := testNodeDivergenceSource },
     { name := "testIdempotenceSources", run := testIdempotenceSources },
     { name := "testLeadingStart", run := testLeadingStart },
-    { name := "testSuppression", run := testSuppression }]
+    { name := "testSuppression", run := testSuppression },
+    { name := "testAtomicPublication", run := testAtomicPublication },
+    { name := "testLineEndingModes", run := testLineEndingModes }]
 
 end LeanFmt.Test.Unit.Source

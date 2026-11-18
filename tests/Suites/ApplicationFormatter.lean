@@ -347,6 +347,54 @@ theorem relexThree : 2 # = 2 := rfl\n"
   let failures := (jsonAt? report [.field "infrastructureFailures"]).bind (·.getArr?.toOption)
   ensureEq "a converged file was still an infrastructure failure" 0 ((failures.map (·.size)).getD 0)
 
+private def testLineEndings (ctx : Ctx) : IO Unit := do
+  let path := ctx.work / "Endings.lean"
+  let lf := "module\n\ndef  ending :Nat:=1\n"
+  let crlf := lf.replace "\n" "\r\n"
+  let mixed := "module\r\n\ndef  ending :Nat:=1\r\n"
+  for source in [lf, crlf, mixed] do
+    for mode in ["preserve", "lf", "crlf"] do
+      writeFile path source
+      let options :=
+        #["--root", ctx.root.toString, "--no-cache", "--line-ending", mode, "--json", path.toString]
+      let preview ←
+        expectExit 1 "line-ending preview" ctx.application (#["format", "--check"] ++ options)
+            (cwd? := some ctx.root)
+      ensureEq "preview must not write source" source (← IO.FS.readFile path)
+      let report ← parseJson preview.stdout "line-ending preview"
+      let some output :=
+        (jsonAt? report [.field "files", .index 0, .field "formatted"]).bind
+          (·.getStr?.toOption) | throw <| IO.userError "line-ending preview omitted its candidate"
+      let normalized := output.crlfToLf
+      let expected :=
+        if mode == "crlf" || (mode == "preserve" && source != lf) then
+          normalized.replace "\n" "\r\n"
+        else normalized
+      ensureEq "preview applies selected line endings" expected output
+      discard <|
+          expectExit 0 "line-ending publication" ctx.application (#["format"] ++ options) (cwd? :=
+            some ctx.root)
+      ensureEq "publication agrees with preview bytes" output (← IO.FS.readFile path)
+      discard <|
+          expectExit 0 "line-ending idempotence" ctx.application (#["format", "--check"] ++ options)
+            (cwd? := some ctx.root)
+  -- A canonical file can still require a change consisting only of line endings.
+  let canonical := (← IO.FS.readFile path).crlfToLf
+  writeFile path canonical
+  discard <|
+      expectExit 1 "newline-only preview" ctx.application
+        #["format", "--check", "--root", ctx.root.toString, "--no-cache", "--line-ending", "crlf",
+          path.toString]
+        (cwd? := some ctx.root)
+  ensureEq "newline-only preview is read-only" canonical (← IO.FS.readFile path)
+  discard <|
+      expectExit 0 "newline-only fix" ctx.application
+        #["check", "--fix", "--root", ctx.root.toString, "--no-cache", "--select", "FMT011",
+          "--line-ending", "crlf", path.toString]
+        (cwd? := some ctx.root)
+  ensureEq "fix publishes explicit newline-only conversion" (canonical.replace "\n" "\r\n")
+      (← IO.FS.readFile path)
+
 end ApplicationFormatter
 
 public def main (args : List String) : IO UInt32 := do
@@ -365,7 +413,8 @@ public def main (args : List String) : IO UInt32 := do
       let ctx : ApplicationFormatter.Ctx :=
         { root, application := (root / ".lake" / "build" / "bin" / "lean-fmt").toString, work }
       let cases : Array Case :=
-        #[{ name := "preview-diff-agreement",
+        #[{ name := "line-endings", run := ApplicationFormatter.testLineEndings ctx },
+          { name := "preview-diff-agreement",
             run := ApplicationFormatter.testPreviewDiffAgreement ctx },
           { name := "cache-service", run := ApplicationFormatter.testCacheService ctx },
           { name := "path-metrics", run := ApplicationFormatter.testPathMetrics ctx },

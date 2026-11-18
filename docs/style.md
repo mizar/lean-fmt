@@ -20,8 +20,10 @@ decision cannot be dropped or renamed without a test failing.
   the unbreakable rows are the common case.
 - Horizontal whitespace is one space where separation is required and absent next to hugged delimiters. There are no
   tabs or trailing spaces in formatter-owned output.
-- A module ends in one newline. Everything from a terminal command such as `#exit` onward is copied verbatim. Your
-  file's CRLF or LF line endings are restored when it is written back.
+- A module ends in one newline. Everything from a terminal command such as `#exit` onward is copied from the
+  normalized source before applying the output line-ending policy. By default, changed output uses CRLF if the input
+  contains any CRLF, and LF otherwise. An otherwise unchanged mixed file is left alone. Use `--line-ending lf` or
+  `--line-ending crlf` to force a form instead.
 - Source order carries meaning, so formatting never sorts. Imports, modifiers, binders, fields, constructors, match
   arms, tactics, `do` items, and custom syntax stay in the order you wrote them.
 - A comment keeps its exact text and stays attached to one construct. Reindenting moves the comment, never the

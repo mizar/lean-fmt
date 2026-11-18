@@ -67,6 +67,11 @@ The job goes red on a broken build or a nonzero file count, and stays green on r
 lands in nearly every release, and a job that fails every time is one nobody reads. Read the drift diff in the run
 summary when deciding what item 2 of "What a bump can move" means for this release.
 
+The `windows-next-toolchain` job uses the same resolved candidate for its build, lint, native unit tier, and
+publication/LSP line-ending regressions. It runs on schedule and manual dispatch even if the Linux probe fails;
+when the candidate equals the pinned toolchain, it is skipped. The regular `windows` job tests the pinned toolchain.
+An automatic bump PR requires both the Linux probe's success criteria and passing Windows checks.
+
 Nothing here adapts anything, and no branch is left behind: `lean-toolchain` is rewritten in the runner and never
 committed. The adaptation is this checklist, on an ordinary pull request.
 

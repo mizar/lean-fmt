@@ -250,8 +250,9 @@ private partial def suitePoll (child : IO.Process.Child ⟨.null, .piped, .piped
     (peak : IO.Ref Nat) : IO UInt32 := do
   if let some code← child.tryWait then
     return code
-  let snapshot ← IO.Process.output { cmd := "ps", args := #["-Ao", "rss=,pid=,ppid="] }
-  peak.modify (max · (treeRssKb snapshot.stdout child.pid.toNat))
+  unless System.Platform.isWindows do
+    let snapshot ← IO.Process.output { cmd := "ps", args := #["-Ao", "rss=,pid=,ppid="] }
+    peak.modify (max · (treeRssKb snapshot.stdout child.pid.toNat))
   IO.sleep 1000
   suitePoll child peak
 
@@ -311,12 +312,13 @@ private def digestLines (output : String) : Array String :=
     else
       picked
 
-/-- Build every selected executable in one invocation, so the run itself contains no builds. -/
+/-- Build the product, unit helper, and selected suite executables before launching suites. -/
 private def buildSuites (root : System.FilePath) (suites : Array Suite) : IO Unit := do
-  -- The product binary is built alongside: every suite drives it, so a source edit that
-  -- only rebuilds the suite would test a stale product.
+  -- Build the product and helper binaries before concurrency starts. The unit tier runs in this
+  -- process and does not produce the helper executable used by performance and security-bench.
   let result ←
-    runProc "lake" (#["-q", "build", "lean-fmt"] ++ suites.map (·.exeName)) (cwd? := some root)
+    runProc "lake" (#["-q", "build", "lean-fmt", "lean-fmt-tests"] ++ suites.map (·.exeName))
+        (cwd? := some root)
   -- Both streams: `lake -q` puts the failed job's log on stdout, and stderr alone showed
   -- "error: build failed" with the cause nowhere — the flake-hunt's slow step failed
   -- anonymous exactly once before this carried both.
@@ -458,10 +460,13 @@ public def main (args : List String) : IO UInt32 := do
     -- Peak RSS is a count, not a wall time: the envelope a CI job budgets per suite, measured
     -- while the run is green. One-second sampling can miss shorter spikes; this is for
     -- envelope planning, and no assertion reads it yet.
-    IO.println "\n--- heaviest suites (peak RSS, sampled) ---"
-    let heaviest := outcomes.qsort (·.peakRssKb > ·.peakRssKb)
-    for outcome in heaviest.toList.take 8 do
-      IO.println s!"{pad (toString (outcome.peakRssKb / 1024)) 7}MB  {outcome.suite.name}"
+    if System.Platform.isWindows then
+      IO.println "\nRSS sampling is unavailable on Windows."
+    else
+      IO.println "\n--- heaviest suites (peak RSS, sampled) ---"
+      let heaviest := outcomes.qsort (·.peakRssKb > ·.peakRssKb)
+      for outcome in heaviest.toList.take 8 do
+        IO.println s!"{pad (toString (outcome.peakRssKb / 1024)) 7}MB  {outcome.suite.name}"
     if failures.isEmpty then
       IO.println s!"all {outcomes.size} suite(s) passed"
       return 0

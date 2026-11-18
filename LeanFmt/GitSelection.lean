@@ -237,7 +237,9 @@ private def confine (toplevel root : FilePath) (relative : String) : IO (Option 
     let rootResolved ← IO.FS.realPath root
     let resolvedText := resolved.toString
     let rootText := rootResolved.toString
-    if resolvedText == rootText || resolvedText.startsWith (rootText ++ "/") then
+    if
+        resolvedText == rootText ||
+          resolvedText.startsWith (rootText ++ FilePath.pathSeparator.toString) then
       return some resolved
     return none
   catch _ =>

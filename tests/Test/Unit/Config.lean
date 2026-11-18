@@ -28,8 +28,10 @@ import all LeanFmt.Discovery
 import all LeanFmt.Doc
 import all LeanFmt.Edit
 import all LeanFmt.Formatter.NativeLayout
+import all LeanFmt.GitSelection
 import all LeanFmt.Imports
 import all LeanFmt.LanguageServer
+import all LeanFmt.Project
 import all LeanFmt.Rules
 import all LeanFmt.Suppression
 import all Test.Unit.Fixtures
@@ -646,8 +648,85 @@ extend-select = [\"FMT009\"]\n"
   finally
     IO.FS.removeDirAll directory
 
+private def testProjectPaths : IO Unit :=
+  withTempDir fun directory => do
+    let root ← IO.FS.realPath directory
+    writeFile (root / "lakefile.lean") "import Lake\nopen Lake DSL\npackage fixture\n"
+    copyFile ((← repoRoot) / "lean-toolchain") (root / "lean-toolchain")
+    writeFile (root / "sub" / "lean-fmt.toml") "[format]\nline-width = 42\n"
+    writeFile (root / "sub" / "A.lean") "module\n"
+    let discovery ← Discovery.run root none
+    let snapshot ← Project.load root discovery #[root / "sub" / "A.lean"]
+    let some target :=
+      snapshot.targets[0]? | throw <| IO.userError "project selection lost the requested source"
+    ensureEq "project paths use discovery coordinates" "sub/A.lean" target.relativePath
+    ensureEq "nested configuration reaches project targets" 42 target.config.format.lineWidth
+    let unsaved ←
+      Project.unsavedTarget snapshot.workspace discovery root (root / "sub" / "New.lean").toString
+          "module\n"
+    ensureEq "unsaved project paths use discovery coordinates" "sub/New.lean" unsaved.relativePath
+    ensureEq "nested configuration reaches unsaved targets" 42 unsaved.config.format.lineWidth
+    if System.Platform.isWindows then
+      let upperRoot := System.FilePath.mk root.toString.toUpper
+      let alternate ←
+        Project.unsavedTarget snapshot.workspace discovery root
+            (upperRoot / "sub" / "New.lean").toString "module\n"
+      ensureEq "root casing cannot change unsaved discovery coordinates" "sub/New.lean"
+          alternate.relativePath
+      ensureEq "root casing cannot bypass nested configuration" 42 alternate.config.format.lineWidth
+      let alternateReport ←
+        Application.describeConfig root none (upperRoot / "sub" / "A.lean").toString
+      ensureEq "root casing cannot change config introspection coordinates" "sub/A.lean"
+          alternateReport.relativePath
+      ensure alternateReport.selected "config introspection rejected a case-varied source"
+      ensureEq "root casing cannot bypass introspected nested configuration" (some "42")
+          ((alternateReport.settings.find? (·.key == "format.line-width")).map (·.value))
+      writeFile (root / ".lake" / "Blocked.lean") "module\n"
+      for lakeDirectory in [".lake", ".LAKE"] do
+        let argument := (upperRoot / lakeDirectory / "NeverSaved.lean").toString
+        let rejected ←
+          try
+            discard <| Project.unsavedTarget snapshot.workspace discovery root argument "module\n"
+            pure false
+          catch error =>
+            ensure (error.toString.contains "selected file is inside the Lake build directory")
+                "case-varied Lake path was rejected for the wrong reason"
+            ensure (error.toString.contains argument) "Lake refusal lost the caller's argument"
+            pure true
+        ensure rejected "root casing cannot bypass the Lake directory exclusion"
+        let diskRejected ←
+          try
+            discard <| Project.load root discovery #[upperRoot / lakeDirectory / "Blocked.lean"]
+            pure false
+          catch error =>
+            ensure (error.toString.contains "selected file is inside the Lake build directory")
+                "case-varied disk Lake path was rejected for the wrong reason"
+            pure true
+        ensure diskRejected "root casing cannot select a disk source in the Lake directory"
+    let report ← Application.describeConfig root none (root / "sub" / "A.lean").toString
+    ensureEq "config show uses discovery coordinates" "sub/A.lean" report.relativePath
+    ensureEq "config show reaches nested settings" (some "42")
+        ((report.settings.find? (·.key == "format.line-width")).map (·.value))
+    let confined ← GitSelection.confine root root "sub/A.lean"
+    ensure confined.isSome "git selection dropped a source inside the root"
+    let outside ← GitSelection.confine root (root / "sub") "lakefile.lean"
+    ensure outside.isNone "git selection admitted a source outside the selected root"
+    writeFile (root / "sub" / "lean-fmt.toml") "[format]\nline-ending = \"lf\"\n"
+    let configured ← Discovery.run root none
+    ensureEq "configured line endings reach nested sources" LineEndingMode.lf
+        (configured.configFor "sub/A.lean").format.lineEnding
+    let overridden := configured.overrideLineEnding (some .crlf)
+    ensureEq "CLI line endings override nested settings" LineEndingMode.crlf
+        (overridden.configFor "sub/A.lean").format.lineEnding
+    ensure
+        ((configured.configFor "sub/A.lean").format.identityString !=
+          (overridden.configFor "sub/A.lean").format.identityString)
+        "line-ending selection did not enter cache identity"
+    ensure (LineEndingMode.parse? "native" == none) "invalid line-ending selection was accepted"
+
 /-- The cases this module contributes to the unit runner, in run order. -/
 public def cases : Array Case :=
-  #[{ name := "testConfig", run := testConfig }, { name := "testDiscovery", run := testDiscovery }]
+  #[{ name := "testConfig", run := testConfig }, { name := "testDiscovery", run := testDiscovery },
+    { name := "testProjectPaths", run := testProjectPaths }]
 
 end LeanFmt.Test.Unit.Config
