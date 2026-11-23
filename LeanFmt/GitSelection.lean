@@ -235,9 +235,11 @@ private def confine (toplevel root : FilePath) (relative : String) : IO (Option 
   try
     let resolved ← IO.FS.realPath candidate
     let rootResolved ← IO.FS.realPath root
-    let resolvedText := resolved.toString
-    let rootText := rootResolved.toString
-    if resolvedText == rootText || resolvedText.startsWith (rootText ++ "/") then
+    let resolvedText := resolved.normalize.toString
+    let rootText := rootResolved.normalize.toString
+    let separator := FilePath.pathSeparator.toString
+    let rootPrefix := if rootText.endsWith separator then rootText else rootText ++ separator
+    if resolvedText == rootText || resolvedText.startsWith rootPrefix then
       return some resolved
     return none
   catch _ =>
@@ -265,7 +267,7 @@ def select (root : FilePath) (comparison : Comparison) : IO (Except String Selec
         pure (some resolved)
     | _ =>
       pure none
-  let diff ← runGit root (diffArguments comparison)
+  let diff ← runGit toplevel (diffArguments comparison)
   if diff.exitCode == missingBinaryCode then
     return .error absent
   if diff.exitCode != 0 then
@@ -286,7 +288,7 @@ def select (root : FilePath) (comparison : Comparison) : IO (Except String Selec
     else
       candidates := candidates.push record.path
   if includesUntracked comparison then
-    let untracked ← runGit root untrackedArguments
+    let untracked ← runGit toplevel untrackedArguments
     if untracked.exitCode == missingBinaryCode then
       return .error absent
     if untracked.exitCode != 0 then
