@@ -205,9 +205,30 @@ private def testFixAllAdversarial : IO Unit := do
   ensure (asSafe.formatted == asUnsafe.formatted && asSafe.formatted == "Xbc")
       "applicability changed the bytes a fix produces"
 
+private def testWindowsPublication : IO Unit := withTempDir fun dir => do
+  let path := dir / "source's permissions.lean"
+  IO.FS.writeFile path "before"
+  let readAcl (command : String) : IO String := do
+    let result ← expectExit 0 "source ACL" "powershell.exe"
+        #["-NoProfile", "-NonInteractive", "-Command", command]
+        (env := #[("LEAN_FMT_TEST_SOURCE", some path.toString)])
+    return result.stdout.trimAscii.toString
+  let getAcl := "[IO.File]::GetAccessControl($env:LEAN_FMT_TEST_SOURCE)"
+  let readDacl := getAcl ++ ".GetSecurityDescriptorSddlForm('Access')"
+  -- A new file inherits its parent DACL. Protect the source DACL so losing it is observable.
+  let before ← readAcl ("$ErrorActionPreference='Stop'; $a=" ++ getAcl ++
+      "; $a.SetAccessRuleProtection($true,$true); " ++
+      "[IO.File]::SetAccessControl($env:LEAN_FMT_TEST_SOURCE,$a); " ++ readDacl)
+  IO.ofExcept (← Application.publishAtomic path "before" "after")
+  ensureEq "published bytes" "after" (← IO.FS.readFile path)
+  ensureEq "published source DACL" before (← readAcl readDacl)
+
 /-- The cases this module contributes to the unit runner, in run order. -/
 public def cases : Array Case :=
   #[{ name := "testEdits", run := testEdits },
-    { name := "testFixAllAdversarial", run := testFixAllAdversarial }]
+    { name := "testFixAllAdversarial", run := testFixAllAdversarial }] ++
+    (if System.Platform.isWindows then
+      #[{ name := "testWindowsPublication", run := testWindowsPublication }]
+    else #[])
 
 end LeanFmt.Test.Unit.Edit
