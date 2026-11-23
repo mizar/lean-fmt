@@ -1,6 +1,7 @@
 module
 
 public import Test
+import all LeanFmt.GitSelection
 
 /-!
 # The watch suite
@@ -33,6 +34,22 @@ private def git (args : Array String) (cwd : System.FilePath) (label : String) :
 
 private def gitAny (args : Array String) (cwd : System.FilePath) : IO ProcResult :=
   runProc "git" args (cwd? := some cwd)
+
+private def testChangedUnderRoot (ctx : Ctx) : IO Unit := do
+  let root := ctx.fixture / "sub"
+  let fresh := root / "New.lean"
+  writeFile fresh "n\n"
+  try
+    let .ok selection ← LeanFmt.Internal.GitSelection.select root .worktree
+      | throw <| IO.userError "changed-file selection failed"
+    let tracked ← IO.FS.realPath (root / "B.lean")
+    let untracked ← IO.FS.realPath fresh
+    ensure (selection.paths.size == 2 && selection.paths.contains tracked &&
+        selection.paths.contains untracked) "expected both changed files under sub/"
+    ensure (selection.dropped.contains (.outsideRoot "Renamed.lean"))
+        "expected the renamed file outside sub/ to be withheld"
+  finally
+    IO.FS.removeFile fresh
 
 /-- mtime distinguishes a same-size rewrite at the interval real edits arrive at. `(size, mtime)`
 is the whole change signal, so a filesystem that stamped only whole seconds would leave the poll
@@ -281,6 +298,7 @@ public def main (args : List String) : IO UInt32 := do
         #[{ name := "mtime-granularity", run := Watch.testMtimeGranularity ctx },
           { name := "diff-never-reports-untracked",
             run := Watch.testDiffNeverReportsUntracked ctx },
+          { name := "changed-under-root", run := Watch.testChangedUnderRoot ctx },
           { name := "z-stream-records", run := Watch.testZStreamRecords ctx },
           { name := "z-byte-exact", run := byteExact }, { name := "three-dot", run := threeDot },
           { name := "rev-parse-probe", run := Watch.testRevParseProbe ctx },
