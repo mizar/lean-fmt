@@ -1159,16 +1159,27 @@ private def runBeforeWriteHook (path : FilePath) : IO Unit := do
 
 private def publishAtomic (path : FilePath) (original output : String) : IO (Except String Unit) :=
   do
-  let mode ← accessMode path
   let temporary ← publicationTemp path
   try
     IO.FS.writeFile temporary output
-    IO.Prim.setAccessRights temporary mode.toUInt32
+    unless System.Platform.isWindows do
+      IO.Prim.setAccessRights temporary (← accessMode path).toUInt32
     runBeforeWriteHook path
     unless (← IO.FS.readFile path) == original do
       IO.FS.removeFile temporary
       return .error "source changed after analysis; refusing stale write"
-    IO.FS.rename temporary path
+    if System.Platform.isWindows then
+      -- File.Replace preserves the destination DACL. Pass paths as data, including quotes and spaces.
+      let result ← IO.Process.output {
+        cmd := "powershell.exe"
+        args := #["-NoProfile", "-NonInteractive", "-Command",
+          "[IO.File]::Replace($env:LEAN_FMT_REPLACEMENT,$env:LEAN_FMT_DESTINATION,[NullString]::Value)"]
+        env := #[("LEAN_FMT_REPLACEMENT", some temporary.toString),
+          ("LEAN_FMT_DESTINATION", some path.toString)] }
+      unless result.exitCode == 0 do
+        throw <| IO.userError s!"could not replace {path}: {result.stderr.trimAscii}"
+    else
+      IO.FS.rename temporary path
     return .ok ()
   catch error =>
     if ← temporary.pathExists then
